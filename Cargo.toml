@@ -1,0 +1,12 @@
+[package]
+name = "simple-proxy"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hyper = { version = "0.14.26", features = ["http1", "http2", "server", "tcp", "client"] }
+tokio = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
