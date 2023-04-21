@@ -1,16 +1,18 @@
 use diesel::{Connection, MysqlConnection, RunQueryDsl};
 use std::collections::HashMap;
-use std::env;
+use std::fs::File;
 use std::future::Future;
+use std::io::Read;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::{env, fs};
 
 use crate::models;
 use crate::models::Tunnel;
 use crate::schema::tunnels::dsl::tunnels;
 use hyper::service::Service;
-use hyper::{Body, Client, Request, Response};
+use hyper::{Body, Client, Method, Request, Response, StatusCode};
 use tokio::time::Instant;
 use tracing::{error, info};
 
@@ -19,11 +21,11 @@ pub struct ProxyService {
 }
 
 impl ProxyService {
-    fn proxy(
+    async fn proxy(
         mut req: Request<Body>,
         host: String,
         tunnel_host: String,
-    ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, hyper::Error>> + Send>> {
+    ) -> Result<Response<Body>, hyper::Error> {
         let uri = req.uri();
 
         let query = match uri.query() {
@@ -39,21 +41,61 @@ impl ProxyService {
 
         let client = Client::new();
 
-        Box::pin(async move {
-            match client.request(req).await {
-                Ok(res) => Ok(res),
-                Err(err) => {
-                    error!("{}", err.to_string().as_str());
-                    Err(err)
-                }
+        match client.request(req).await {
+            Ok(res) => Ok(res),
+            Err(err) => {
+                error!("{}", err.to_string().as_str());
+                Err(err)
             }
-        })
+        }
     }
 
-    fn http(
-        _req: Request<Body>,
-    ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, hyper::Error>> + Send>> {
-        Box::pin(async move { Ok(Response::new(Body::from("Servus!"))) })
+    async fn http(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+        match (req.method(), req.uri().path()) {
+            (&Method::GET, mut path) => {
+                if path == "/" {
+                    path = "/index.html";
+                }
+
+                let file_location = format!("./client/dist{}", path);
+
+                info!("loading path at {}", file_location);
+
+                if let Ok(mut file) = File::open(&file_location) {
+                    //todo better way
+
+                    let metadata = fs::metadata(&file_location).expect("unable to read metadata");
+                    let mut buffer = vec![0; metadata.len() as usize];
+                    file.read(&mut buffer).expect("buffer overflow");
+
+                    let body = Body::from(buffer);
+
+                    let mime_type = match file_location.split('.').last().unwrap() {
+                        "js" => "text/javascript",
+                        "html" => "text/html",
+                        "css" => "text/css",
+                        _ => "",
+                    };
+
+                    let res = Response::builder()
+                        .header("Content-Type", mime_type)
+                        .body(body)
+                        .unwrap();
+
+                    return Ok(res);
+                }
+
+                ProxyService::not_found()
+            }
+            (_, _) => ProxyService::not_found(),
+        }
+    }
+
+    fn not_found() -> Result<Response<Body>, hyper::Error> {
+        Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("not found".to_string()))
+            .unwrap())
     }
 }
 
@@ -77,14 +119,23 @@ impl Service<Request<Body>> for ProxyService {
             .unwrap()
             .to_string();
 
-        let res = match self.tunnel_map.lock().unwrap().get(&host) {
-            None => ProxyService::http(req),
-            Some(tunnel_host) => ProxyService::proxy(req, host.to_string(), tunnel_host.clone()),
+        let new_host = match self.tunnel_map.lock().unwrap().get(&host) {
+            None => None,
+            Some(host) => Some(host.to_string()),
         };
 
-        info!("response took {:?}", now.elapsed());
+        Box::pin(async move {
+            let res = match new_host {
+                None => ProxyService::http(req).await,
+                Some(tunnel_host) => {
+                    ProxyService::proxy(req, host.to_string(), tunnel_host.clone()).await
+                }
+            };
 
-        res
+            info!("response took {:?}", now.elapsed());
+
+            res
+        })
     }
 }
 
