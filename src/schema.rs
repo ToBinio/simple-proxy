@@ -1,5 +1,5 @@
 diesel::table! {
-    connections (id) {
+    tunnels (id) {
         id -> Int4,
         domain_from -> VarChar,
         domain_to -> VarChar,
