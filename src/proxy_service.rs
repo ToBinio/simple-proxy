@@ -6,13 +6,13 @@ use std::io::Read;
 use std::pin::Pin;
 use std::sync::{mpsc, Arc, Mutex};
 use std::task::{Context, Poll};
-use futures::executor::block_on;
 
+use futures::executor::block_on;
 use hyper::body::HttpBody;
 use hyper::service::Service;
 use hyper::{Body, Client, Method, Request, Response, StatusCode};
 use serde::Deserialize;
-use tokio::task::block_in_place;
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tracing::{debug, error, info};
 
@@ -200,7 +200,7 @@ impl MakeProxyService {
     }
 
     fn listen_db_updates(&self) {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = oneshot::channel();
 
         self.db_sender
             .send(DBMessage::Subscribe(sender))
@@ -211,15 +211,14 @@ impl MakeProxyService {
 
         let db_sender = self.db_sender.clone();
 
-
-        std::thread::spawn(move || {
-            let mut update_receiver = receiver.recv().unwrap();
+        tokio::task::spawn_blocking(move || {
+            let mut update_receiver = block_on(receiver).unwrap();
 
             while let Ok(()) = block_on(update_receiver.recv()) {
-                let (sender, receiver) = mpsc::channel();
+                let (sender, receiver) = oneshot::channel();
                 db_sender.send(DBMessage::GetALl(sender)).unwrap();
 
-                let tunnels = receiver.recv().unwrap();
+                let tunnels = block_on(receiver).unwrap();
 
                 let mut tunnel_map = tunnel_map.lock().unwrap();
                 let mut tunnel_vec = tunnel_vec.lock().unwrap();

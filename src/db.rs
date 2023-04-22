@@ -2,7 +2,7 @@ use std::env;
 use std::sync::mpsc;
 
 use diesel::{Connection, ExpressionMethods, MysqlConnection, QueryDsl, RunQueryDsl};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use tracing::{debug, info};
 
 use crate::models::Tunnel;
@@ -60,7 +60,7 @@ impl DB {
 
 #[derive(Debug)]
 pub enum DBMessage {
-    Subscribe(mpsc::Sender<broadcast::Receiver<()>>),
-    GetALl(mpsc::Sender<Vec<Tunnel>>),
+    Subscribe(oneshot::Sender<broadcast::Receiver<()>>),
+    GetALl(oneshot::Sender<Vec<Tunnel>>),
     Remove(i32),
 }
