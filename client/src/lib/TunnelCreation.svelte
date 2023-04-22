@@ -3,6 +3,14 @@
 
     let from = "";
     let to = "";
+
+    function onAdd(){
+        addTunnel(from,to);
+
+        from = "";
+        to = "";
+    }
+
 </script>
 
 <div>
@@ -11,6 +19,6 @@
     <div>
         <input bind:value={from} type="text" name="from" id="from" placeholder="from">
         <input bind:value={to} type="text" name="from" id="to" placeholder="to">
-        <button on:click={() => addTunnel(from,to)}>Add</button>
+        <button on:click={onAdd}>Add</button>
     </div>
 </div>

@@ -1,9 +1,10 @@
+use std::env;
 use std::net::SocketAddr;
 
 use diesel::{Connection, RunQueryDsl};
 use dotenvy::dotenv;
+use futures::TryStreamExt;
 use hyper::Server;
-use tracing::metadata::LevelFilter;
 use tracing::subscriber::set_global_default;
 use tracing::{error, info};
 use tracing_subscriber::FmtSubscriber;
@@ -18,16 +19,16 @@ mod schema;
 
 #[tokio::main]
 async fn main() {
-    set_global_default(
-        FmtSubscriber::builder()
-            .with_max_level(LevelFilter::DEBUG)
-            .finish(),
-    )
-    .expect("could not set default tracer");
+    set_global_default(FmtSubscriber::builder().finish()).expect("could not set default tracer");
 
     dotenv().ok();
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let addr: [u8;4] = env::var("ADDR").expect("ADDR must be set").split(".").into_iter().map(|part| part.parse().unwrap()).collect::<Vec<u8>>().try_into().unwrap();
+
+    let addr = SocketAddr::from((
+        addr,
+        env::var("PORT").expect("PORT must be set").parse().unwrap(),
+    ));
 
     let db_sender = DB::start();
 
