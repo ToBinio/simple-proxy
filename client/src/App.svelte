@@ -1,7 +1,13 @@
-<h2>Servus</h2>
+<script lang="ts">
 
-<style>
-    h2 {
-        color: green;
-    }
-</style>
+    import TunnelDisplay from "./lib/TunnelDisplay.svelte";
+    import {tunnels} from "./stores/tunnels";
+</script>
+
+<div>
+    <h2>Tunnels</h2>
+
+    {#each $tunnels as tunnel}
+        <TunnelDisplay bind:tunnel={tunnel}/>
+    {/each}
+</div>

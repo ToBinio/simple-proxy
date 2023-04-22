@@ -1,31 +1,37 @@
-use std::collections::HashMap;
-use std::env;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 
-use crate::models::Tunnel;
-use diesel::{Connection, MysqlConnection, RunQueryDsl};
+use diesel::{Connection, RunQueryDsl};
 use dotenvy::dotenv;
 use hyper::Server;
+use tracing::metadata::LevelFilter;
 use tracing::subscriber::set_global_default;
 use tracing::{error, info};
 use tracing_subscriber::FmtSubscriber;
 
+use crate::db::DB;
 use crate::proxy_service::MakeProxyService;
 
+mod db;
 mod models;
 mod proxy_service;
 mod schema;
 
 #[tokio::main]
 async fn main() {
-    set_global_default(FmtSubscriber::builder().finish()).expect("could not set default tracer");
+    set_global_default(
+        FmtSubscriber::builder()
+            .with_max_level(LevelFilter::DEBUG)
+            .finish(),
+    )
+    .expect("could not set default tracer");
 
     dotenv().ok();
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 80));
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
 
-    let server = Server::bind(&addr).serve(MakeProxyService::new());
+    let db_sender = DB::start();
+
+    let server = Server::bind(&addr).serve(MakeProxyService::new(db_sender));
 
     info!("server started");
 

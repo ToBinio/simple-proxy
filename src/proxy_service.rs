@@ -1,23 +1,29 @@
-use diesel::{Connection, MysqlConnection, RunQueryDsl};
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::task::{Context, Poll};
-use std::{env, fs};
+use futures::executor::block_on;
 
-use crate::models;
-use crate::models::Tunnel;
-use crate::schema::tunnels::dsl::tunnels;
+use hyper::body::HttpBody;
 use hyper::service::Service;
 use hyper::{Body, Client, Method, Request, Response, StatusCode};
+use serde::Deserialize;
+use tokio::task::block_in_place;
 use tokio::time::Instant;
-use tracing::{error, info};
+use tracing::{debug, error, info};
+
+use crate::db::DBMessage;
+use crate::db::DBMessage::Remove;
+use crate::models::Tunnel;
 
 pub struct ProxyService {
     pub tunnel_map: Arc<Mutex<HashMap<String, String>>>,
+    pub tunnel_vec: Arc<Mutex<Vec<Tunnel>>>,
+    pub db_sender: mpsc::Sender<DBMessage>,
 }
 
 impl ProxyService {
@@ -50,8 +56,42 @@ impl ProxyService {
         }
     }
 
-    async fn http(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    async fn http(
+        db_sender: mpsc::Sender<DBMessage>,
+        tunnel_vec: Arc<Mutex<Vec<Tunnel>>>,
+        req: Request<Body>,
+    ) -> Result<Response<Body>, hyper::Error> {
+        debug!("{} - {}", req.method(), req.uri().path());
+
         match (req.method(), req.uri().path()) {
+            (&Method::GET, "/api/") => {
+                let tunnel_vec = tunnel_vec.lock().unwrap();
+
+                let tunnels_string = serde_json::to_string(&*tunnel_vec).unwrap();
+
+                let response = Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(Body::from(tunnels_string))
+                    .expect("Could not create it");
+
+                Ok(response)
+            }
+
+            (&Method::POST, "/api/delete/") => {
+                let bytes = hyper::body::to_bytes(req.into_body()).await?;
+
+                let bytes: Vec<u8> = bytes.iter().map(|byte| *byte).collect();
+
+                let delete_req: DeleteReq = serde_json::from_slice(&bytes).unwrap();
+
+                db_sender.send(Remove(delete_req.id)).unwrap();
+
+                Ok(Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body("Ok".into())
+                    .unwrap())
+            }
+
             (&Method::GET, mut path) => {
                 if path == "/" {
                     path = "/index.html";
@@ -124,12 +164,13 @@ impl Service<Request<Body>> for ProxyService {
             Some(host) => Some(host.to_string()),
         };
 
+        let sender = self.db_sender.clone();
+        let tunnel_vec = self.tunnel_vec.clone();
+
         Box::pin(async move {
             let res = match new_host {
-                None => ProxyService::http(req).await,
-                Some(tunnel_host) => {
-                    ProxyService::proxy(req, host.to_string(), tunnel_host.clone()).await
-                }
+                None => ProxyService::http(sender, tunnel_vec, req).await,
+                Some(tunnel_host) => ProxyService::proxy(req, host.to_string(), tunnel_host).await,
             };
 
             info!("response took {:?}", now.elapsed());
@@ -141,22 +182,61 @@ impl Service<Request<Body>> for ProxyService {
 
 pub struct MakeProxyService {
     tunnel_map: Arc<Mutex<HashMap<String, String>>>,
+    tunnel_vec: Arc<Mutex<Vec<Tunnel>>>,
+    db_sender: mpsc::Sender<DBMessage>,
 }
 
 impl MakeProxyService {
-    pub fn new() -> MakeProxyService {
-        let mut tunnel_map = HashMap::new();
-        let tunnel_vec = load_data();
+    pub fn new(db_sender: mpsc::Sender<DBMessage>) -> MakeProxyService {
+        let make = MakeProxyService {
+            tunnel_map: Arc::new(Mutex::new(HashMap::new())),
+            tunnel_vec: Arc::new(Mutex::new(vec![])),
+            db_sender,
+        };
 
-        info!("tunnel-data loaded");
+        make.listen_db_updates();
 
-        for tunnel in tunnel_vec {
-            tunnel_map.insert(tunnel.domain_from, tunnel.domain_to);
-        }
+        make
+    }
 
-        MakeProxyService {
-            tunnel_map: Arc::new(Mutex::new(tunnel_map)),
-        }
+    fn listen_db_updates(&self) {
+        let (sender, receiver) = mpsc::channel();
+
+        self.db_sender
+            .send(DBMessage::Subscribe(sender))
+            .expect("TODO: panic message");
+
+        let tunnel_map = self.tunnel_map.clone();
+        let tunnel_vec = self.tunnel_vec.clone();
+
+        let db_sender = self.db_sender.clone();
+
+
+        std::thread::spawn(move || {
+            let mut update_receiver = receiver.recv().unwrap();
+
+            while let Ok(()) = block_on(update_receiver.recv()) {
+                let (sender, receiver) = mpsc::channel();
+                db_sender.send(DBMessage::GetALl(sender)).unwrap();
+
+                let tunnels = receiver.recv().unwrap();
+
+                let mut tunnel_map = tunnel_map.lock().unwrap();
+                let mut tunnel_vec = tunnel_vec.lock().unwrap();
+
+                tunnel_map.clear();
+                tunnel_vec.clear();
+
+                for tunnel in tunnels {
+                    tunnel_map.insert(tunnel.domain_from.clone(), tunnel.domain_to.clone());
+                    tunnel_vec.push(tunnel);
+                }
+
+                info!("updated tunnel-data");
+            }
+
+            debug!("wait");
+        });
     }
 }
 
@@ -170,26 +250,22 @@ impl<T> Service<T> for MakeProxyService {
     }
 
     fn call(&mut self, _: T) -> Self::Future {
-        let tunnel_vec = self.tunnel_map.clone();
+        let tunnel_map = self.tunnel_map.clone();
+        let tunnel_vec = self.tunnel_vec.clone();
+        let db_sender = self.db_sender.clone();
 
         Box::pin(async move {
             Ok(ProxyService {
-                tunnel_map: tunnel_vec,
+                tunnel_map,
+                tunnel_vec,
+                db_sender,
             })
         })
     }
 }
 
-pub fn establish_connection() -> MysqlConnection {
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    MysqlConnection::establish(&database_url)
-        .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
-}
-
-fn load_data() -> Vec<Tunnel> {
-    let mut connection = establish_connection();
-
-    tunnels
-        .load::<Tunnel>(&mut connection)
-        .expect("Error loading connections")
+//todo extra file?
+#[derive(Deserialize)]
+struct DeleteReq {
+    id: i32,
 }
