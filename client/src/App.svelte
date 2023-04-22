@@ -2,6 +2,7 @@
 
     import TunnelDisplay from "./lib/TunnelDisplay.svelte";
     import {tunnels} from "./stores/tunnels";
+    import TunnelCreation from "./lib/TunnelCreation.svelte";
 </script>
 
 <div>
@@ -11,3 +12,5 @@
         <TunnelDisplay bind:tunnel={tunnel}/>
     {/each}
 </div>
+
+<TunnelCreation/>

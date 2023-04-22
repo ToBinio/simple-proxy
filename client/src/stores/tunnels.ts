@@ -1,6 +1,6 @@
 import {writable} from "svelte/store";
 import type {Tunnel} from "../types/tunnel";
-import {apiDeleteTunnel, apiGetAllTunnels} from "../api";
+import {apiAddTunnel, apiDeleteTunnel, apiGetAllTunnels} from "../api";
 
 export const tunnels = writable<Tunnel[]>([])
 
@@ -23,6 +23,18 @@ export async function deleteTunnel(tunnel: Tunnel) {
                 tunnels.splice(i, 1);
             }
         }
+
+        return tunnels
+    })
+}
+
+export async function addTunnel(from: string, to: string) {
+    let id = await apiAddTunnel(from, to);
+
+    console.log("asss " + id);
+
+    tunnels.update((tunnels) => {
+        tunnels.push({domain_from: from, domain_to: to, id: id})
 
         return tunnels
     })

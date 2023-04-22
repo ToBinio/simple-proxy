@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::fs;
 use std::fs::File;
 use std::future::Future;
 use std::io::Read;
 use std::pin::Pin;
 use std::sync::{mpsc, Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Duration;
+use std::{fs, thread};
 
 use futures::executor::block_on;
 use hyper::body::HttpBody;
@@ -17,7 +18,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info};
 
 use crate::db::DBMessage;
-use crate::db::DBMessage::Remove;
+use crate::db::DBMessage::{Add, Remove};
 use crate::models::Tunnel;
 
 pub struct ProxyService {
@@ -75,6 +76,41 @@ impl ProxyService {
                     .expect("Could not create it");
 
                 Ok(response)
+            }
+
+            (&Method::POST, "/api/") => {
+                let bytes = hyper::body::to_bytes(req.into_body()).await?;
+                let bytes: Vec<u8> = bytes.iter().map(|byte| *byte).collect();
+
+                let add_req: AddReq = serde_json::from_slice(&bytes).unwrap();
+
+                let (sender, mut receiver) = oneshot::channel();
+
+                db_sender.send(Add(add_req, sender)).unwrap();
+
+                debug!("waiting for id ");
+
+                let id;
+
+                //todo better way cause wtf!!!!!!!!!!!
+                loop {
+                    match receiver.try_recv() {
+                        Ok(new_id) => {
+                            id = new_id;
+                            break;
+                        }
+                        Err(_) => {
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                    }
+                }
+
+                debug!("got id {}", id);
+
+                Ok(Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(serde_json::to_string(&id).unwrap().into())
+                    .unwrap())
             }
 
             (&Method::POST, "/api/delete/") => {
@@ -267,4 +303,10 @@ impl<T> Service<T> for MakeProxyService {
 #[derive(Deserialize)]
 struct DeleteReq {
     id: i32,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AddReq {
+    pub from: String,
+    pub to: String,
 }

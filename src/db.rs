@@ -6,8 +6,9 @@ use tokio::sync::{broadcast, oneshot};
 use tracing::{debug, info};
 
 use crate::models::Tunnel;
+use crate::proxy_service::AddReq;
 use crate::schema::tunnels::dsl::tunnels;
-use crate::schema::tunnels::id;
+use crate::schema::tunnels::{domain_from, domain_to, id};
 
 pub struct DB {}
 
@@ -48,7 +49,23 @@ impl DB {
                             .expect("Error deleting tunnel");
 
                         update_sender.send(()).unwrap();
-                        debug!("send update request");
+                    }
+                    DBMessage::Add(req, sender) => {
+                        info!("Add tunnel {:?}", req);
+
+                        diesel::insert_into(tunnels)
+                            .values((domain_from.eq(req.from), domain_to.eq(req.to)))
+                            .execute(&mut db_connection)
+                            .unwrap();
+
+                        let vec = tunnels.order_by(id).load::<Tunnel>(&mut db_connection).expect("Error loading connections");
+
+                        debug!("{:?}", vec.last().unwrap());
+
+                        sender.send(vec.last().unwrap().id).unwrap();
+                        update_sender.send(()).unwrap();
+
+                        debug!("send {:?}", vec.last().unwrap());
                     }
                 }
             }
@@ -63,4 +80,5 @@ pub enum DBMessage {
     Subscribe(oneshot::Sender<broadcast::Receiver<()>>),
     GetALl(oneshot::Sender<Vec<Tunnel>>),
     Remove(i32),
+    Add(AddReq, oneshot::Sender<i32>),
 }
