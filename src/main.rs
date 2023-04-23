@@ -23,10 +23,8 @@ async fn main() {
 
     dotenv().ok();
 
-    let addr: [u8;4] = env::var("ADDR").expect("ADDR must be set").split(".").into_iter().map(|part| part.parse().unwrap()).collect::<Vec<u8>>().try_into().unwrap();
-
     let addr = SocketAddr::from((
-        addr,
+        [0, 0, 0, 0],
         env::var("PORT").expect("PORT must be set").parse().unwrap(),
     ));
 
