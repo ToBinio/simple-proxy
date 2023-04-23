@@ -23,16 +23,15 @@ async fn main() {
 
     dotenv().ok();
 
-    let addr = SocketAddr::from((
-        [0, 0, 0, 0],
-        env::var("PORT").expect("PORT must be set").parse().unwrap(),
-    ));
+    let port = env::var("PORT").expect("PORT must be set").parse().unwrap();
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let db_sender = DB::start();
 
     let server = Server::bind(&addr).serve(MakeProxyService::new(db_sender));
 
-    info!("server started");
+    info!("server started on port {}", port);
 
     if let Err(e) = server.await {
         error!("server error: {}", e)
